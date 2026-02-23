@@ -1,0 +1,83 @@
+---
+title: "Core principles for building a reliable multi-agent system on n8n"
+Reliability:
+  - Idempotency
+  - Queue mode + concurrency limit
+  - Retries + Dead Letter Queue
+  - Structured output from all agents (JSON schema), no freeform text
+
+Token minimization:
+  - Route with rules first, then cheap classifier, then LLM last
+  - Cache LLM outputs by hash (prompt + inputs) with TTL
+  - Always pass summaries, never raw long histories
+
+Scalability:
+  - Workers are separete n8n workflows (sub-workflows)
+  - Heavy work async; orchestrator return quickly with job_id and status
+  - Use Redis/Postgres for job state + cache
+
+title: "Architectural components of the multi-agent system"
+Security layer:
+  - Access control (JWT validation, tenant, role-based)
+  - Sensitive data control (masking, encryption, output filtering)
+  - Tool gating (which worker/tools can be used by this user/tenant)
+
+Orchestrator agent:
+  - Normalize request → validate schema
+  - Decide plan → select workers
+  - Dispatch workers (parallel or sequential)
+  - Collect results → aggregate → return response
+
+Worker agents:
+  - has one domain expertise (e.g. TaskWorker, SearchWorker, CodeWorker)
+  - Takes task + content (minimized)
+  - Returns result + evidence + errors
+
+title: "Data contract for communication between orchestrator and worker agents (critical)"
+envelope contract for communication between the controller and worker agents:
+  - request_id: uuid
+  - tenant_id: string
+  - user: {id: string, role: string}
+  - input: {message: string, context: object}
+  - policy: {pii: mas|allow|block, tools allowed: ["worker_1"]}
+  - trace: {parent_span: string, span_id: string}
+
+worker response contract:
+  - request_id: uuid
+  - worker: string
+  - status: success|failure
+  - result: object
+  - evidence: [source: string, content: string]
+  - errors: [code: string, message: string]
+
+title: "n8n implementation"
+nodes:
+  - webhook: entry point for incoming requests (from API or UI)
+  - set: normalize and validate input, generate request_id
+  - function: ensure required fields, apply policy rules (e.g. mask PII)
+  - security: JWT validation, access control
+  - PII/Senstive filter:
+    - rule-based first (e.g. regex for emails, phones)
+    - LLM-based PII detector only if needed (e.g. for unstructured text)
+  - idempotency check: 
+  - Routing:
+    - Swithc node with deterministic rules (e.g. if input contains "create task" → route to TaskWorker)
+    - Fallback to LLM Router only if switch doesn't decide
+  - dispatch workers:
+  - Aggregate results: Merge by key Function to join worker outputs
+  - Final response: 
+    - compose deterministically if possible (e.g. if TaskWorker returns {task_id: 123}, return "Task created with ID 123")
+    - Else call LLM "composer" with only:
+      - user message
+      - worker results summaries
+  - Store + respond:
+    - store response in jobs + cache
+    - return to user
+
+title: "Worker workflow pattern (repeatable template)""
+Each worker is a workflow with:
+  - Execute Workflow Trigger (input is envelope)
+  - Policy check (tools_allowed includes this worker)
+  - Do task
+  - Return structured JSON
+...
