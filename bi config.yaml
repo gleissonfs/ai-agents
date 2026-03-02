@@ -1,0 +1,151 @@
+# Structure of the data to the BI at Blessing Midia
+
+# Table that handles deal history
+tables: 
+  deals_history: 
+    description: "Event log of all deal upserts. Multiple rows per deal_id over time."
+    grain: "deal_id + updated_at"   # each upsert creates a new row
+    keys:
+      primary: [deal_id, updated_at]
+    columns:
+      - deal_id: string
+      - created_at: datetime  #  when lead/deal first entered the CRM
+      - updated_at: datetime   # when this snapshot/upsert happened
+      - origin_id: string
+      - stage_id: string
+      - stage_name: string    # indicators of the funnel stands hered
+      - origin_name: string
+      - status: string        # e.g. LOST, WON, OPEN
+      - reason_lost: string
+      - company: string
+      - product: string
+      - value: number
+      - revenue: string       # the revenue is subjetive (e.g. Bellow $30K)
+      - mktp_revenue: string  # the revenue is subjetive (e.g. Above 50%)
+      - profile: string
+      - priority: string
+      - lead_score: string
+      - niche: string
+      - costumer_awareness: string
+      - objection: string
+      - sub_objection: string
+      - closer: string
+      - state: string
+      - city: string
+      - utm_source: string
+      - utm_medium: string
+      - utm_campaign: string
+      - utm_content: string
+      - utm_term: string
+
+  deals_current: 
+    description: "Current deduped state of each deal. One row per deal_id (latest updated_at)."
+    source: deals_history
+    dedup:
+      unique_key: deal_id
+      order_by: updated_at
+      keep: latest
+    grain: "deal_id"
+    keys:
+      primary: [deal_id]
+
+  # Table that handles daily investment on advertisement
+  investment_daily:
+    description: "Daily ad spend at ad-level granularity."
+    grain: "date + source + campaign + adset + ad"
+    keys:
+      primary: [date, source, campaign, adset, ad]
+    columns:
+      - date: datetime
+      - source: string
+      - campaign: string
+      - adset: string
+      - ad: string
+      - spend: number
+
+
+  # table that handles montly goals    
+  goals_monthly:
+    description: "Monthly performance targets per funnel indicator."
+    grain: "month + funnel_indicator"
+    keys:
+      primary: [month, funnel_indicator]
+    columns:
+      - month: date                 # use first day of month (e.g. 2026-03-01)
+      - funnel_indicator: string    # leads/mql/sql/scheduled/held/closed
+      - target_value: number
+      - allocated_budget: number
+
+
+dimensions:
+  tracking:
+    marketing: [utm_source, utm_medium, utm_campaign, utm_content, utm_term]
+    geolocation: [city, state]
+
+  funnel_mapping:
+    leads:
+      stage_ids: [36beea8c-6aa5-47dc-9d01-06cfab62cd2b,54ac572b-3438-47f4-8ee4-51391e5eac6f]
+      stage_names: ["Leads", "MQL"]
+    mql:
+      stage_ids: [54ac572b-3438-47f4-8ee4-51391e5eac6f]
+      stage_names: ["MQL"]
+    sql:
+      stage_ids: [2f1357cf-c6c4-4c11-9c5f-8e319d987b25]
+      stage_names: ["SQL"]
+    scheduled:
+      stage_ids: [c89bba7b-1150-47a0-854b-8e863cb999e7]
+      stage_names: ["Reunião confirmada"]
+    held:
+      stage_ids: [df4aeb1c-4c41-4850-a8a9-7e60aba46396]
+      rule: ["Reunião realizada"]
+    closed:
+      rule: "status == 'WON'"
+
+  lead_type: [revenue,mktp_revenue, profile, priority, lead_score,]
+  sales_info: [reason_lost, niche, objection, sub_objection] 
+
+metrics:
+  # Lead volume
+  leads_total:
+    source: deals_current
+    type: sum
+    filter: "stage_name == 'Leads' or stage_name == 'MQL'"
+    # SQL will be like : 
+    # SELECT SUM(CASE WHEN stage_name = 'MQL' THEN 1 ELSE 0 END) + SUM(CASE WHEN stage_name = 'Leads' THEN 1 ELSE 0 END) AS leads_total FROM deals_current
+
+  # Meetings
+  meetings_scheduled:
+    source: deals_current
+    type: sum
+    filter: "stage_name == 'Reunião confirmada'"
+    # SELECT SUM(CASE WHEN stage = 'Reunião confirmada' THEN 1 ELSE 0 END) AS meetings_scheduled FROM deals_current
+
+  meetings_held:
+    source: deals_current
+    type: sum
+    filter: "stage_name == 'Reunião realizada'"
+    # SELECT SUM(CASE WHEN stage = 'Reunião realizada' THEN 1 ELSE 0 END) AS meetings_held FROM deals_current
+
+  # Closures
+  deals_won:
+    source: deals_current
+    type: sum
+    filter: "status == 'WON'"
+    # SELECT SUM(CASE WHEN status = 'WON' THEN 1 ELSE 0 END) AS deals_won FROM deals_current
+  
+  # Investment
+  spend_total:
+    source: investment_daily
+    type: sum
+    field: spend
+
+  # Revenue & ROAS
+  revenue_total:
+    source: deals_current
+    type: sum
+    filter: "status == 'WON'"
+    # SELECT SUM(CASE WHEN status = 'WON' THEN value ELSE 0 END) AS deals_won FROM deals_current
+
+  roas:
+    type: formula
+    expression: "revenue_total / spend_total"
